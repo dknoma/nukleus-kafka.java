@@ -19,8 +19,8 @@ import static java.lang.Integer.compareUnsigned;
 import static java.nio.file.StandardCopyOption.REPLACE_EXISTING;
 import static java.nio.file.StandardOpenOption.READ;
 import static java.nio.file.StandardOpenOption.WRITE;
-import static org.reaktivity.nukleus.kafka.internal.cache.KafkaCacheCursorRecord.NEXT_SEGMENT;
-import static org.reaktivity.nukleus.kafka.internal.cache.KafkaCacheCursorRecord.RETRY_SEGMENT;
+import static org.reaktivity.nukleus.kafka.internal.cache.KafkaCacheCursorRecord.NEXT_SEGMENT_VALUE;
+import static org.reaktivity.nukleus.kafka.internal.cache.KafkaCacheCursorRecord.RETRY_SEGMENT_VALUE;
 import static org.reaktivity.nukleus.kafka.internal.cache.KafkaCacheCursorRecord.cursor;
 import static org.reaktivity.nukleus.kafka.internal.cache.KafkaCacheCursorRecord.cursorIndex;
 import static org.reaktivity.nukleus.kafka.internal.cache.KafkaCacheCursorRecord.cursorRetryValue;
@@ -61,21 +61,28 @@ public abstract class KafkaCacheIndexFile extends KafkaCacheFile
 
     public abstract long first(int key);
     public abstract long last(int key);
+    public abstract long floor(int key);
 
     public long resolve(
         long cursor)
     {
         final int index = cursorIndex(cursor);
+        final int value = cursorValue(cursor);
         assert index >= 0;
 
         final int lastIndex = (capacity() >> 3) - 1;
 
-        long resolve = available() != 0 ? cursor(lastIndex + 1, cursorValue(RETRY_SEGMENT)) : NEXT_SEGMENT;
+        long resolve = cursor(lastIndex + 1, available() != 0 ? RETRY_SEGMENT_VALUE : NEXT_SEGMENT_VALUE);
 
-        if (index <= lastIndex)
+        for (int currentIndex = index; currentIndex <= lastIndex; currentIndex++)
         {
-            final long indexEntry = readLong(index << 3);
-            resolve = cursor(index, indexValue(indexEntry));
+            final long indexEntry = readLong(currentIndex << 3);
+            final int indexValue = indexValue(indexEntry);
+            if (indexValue >= value)
+            {
+                resolve = cursor(currentIndex, indexValue);
+                break;
+            }
         }
 
         return resolve;
@@ -109,7 +116,7 @@ public abstract class KafkaCacheIndexFile extends KafkaCacheFile
         {
             final int lastIndex = (capacity() >> 3) - 1;
 
-            long first = available() != 0 ? cursor(lastIndex + 1, cursorValue(RETRY_SEGMENT)) : NEXT_SEGMENT;
+            long first = cursor(lastIndex + 1, available() != 0 ? RETRY_SEGMENT_VALUE : NEXT_SEGMENT_VALUE);
 
             int lowIndex = 0;
             int highIndex = lastIndex;
@@ -167,7 +174,7 @@ public abstract class KafkaCacheIndexFile extends KafkaCacheFile
         public long last(
             int key)
         {
-            long last = NEXT_SEGMENT;
+            long last = cursor(-1, NEXT_SEGMENT_VALUE);
 
             final int lastIndex = (capacity() >> 3) - 1;
 
@@ -224,6 +231,66 @@ public abstract class KafkaCacheIndexFile extends KafkaCacheFile
         }
 
         @Override
+        public long floor(
+            int key)
+        {
+            final int lastIndex = (capacity() >> 3) - 1;
+
+            long floor = cursor(lastIndex + 1, available() != 0 ? RETRY_SEGMENT_VALUE : NEXT_SEGMENT_VALUE);
+
+            int lowIndex = 0;
+            int highIndex = lastIndex;
+
+            while (lowIndex <= highIndex)
+            {
+                final int midIndex = (lowIndex + highIndex) >>> 1;
+                final long midEntry = readLong(midIndex << 3);
+                final int midKey = indexKey(midEntry);
+                final int compareKey = compareUnsigned(midKey, key);
+
+                if (compareKey == 0 || lowIndex == midIndex)
+                {
+                    long lowEntry;
+
+                    lowIndex = midIndex;
+                    lowEntry = midEntry;
+
+                    while (lowIndex > 0)
+                    {
+                        final int candidateIndex = lowIndex - 1;
+                        assert candidateIndex <= lastIndex;
+
+                        final long candidateEntry = readLong(candidateIndex << 3);
+                        final int candidateKey = indexKey(candidateEntry);
+
+                        if (candidateKey < key)
+                        {
+                            break;
+                        }
+
+                        lowIndex = candidateIndex;
+                        lowEntry = candidateEntry;
+                    }
+
+                    assert 0 <= lowIndex && lowIndex <= midIndex;
+
+                    floor = cursor(lowIndex, indexValue(lowEntry));
+                    break;
+                }
+                else if (compareKey < 0)
+                {
+                    lowIndex = midIndex + 1;
+                }
+                else if (compareKey > 0)
+                {
+                    highIndex = midIndex - 1;
+                }
+            }
+
+            return floor;
+        }
+
+        @Override
         public long higher(
             int key,
             long cursor)
@@ -236,7 +303,7 @@ public abstract class KafkaCacheIndexFile extends KafkaCacheFile
 
             final int lastIndex = (capacity() >> 3) - 1;
 
-            long higher = available() != 0 ? cursor(lastIndex + 1, cursorValue(RETRY_SEGMENT)) : NEXT_SEGMENT;
+            long higher = cursor(lastIndex + 1, available() != 0 ? RETRY_SEGMENT_VALUE : NEXT_SEGMENT_VALUE);
 
             for (int currentIndex = index; currentIndex <= lastIndex; currentIndex++)
             {
@@ -267,7 +334,7 @@ public abstract class KafkaCacheIndexFile extends KafkaCacheFile
 
             final int lastIndex = (capacity() >> 3) - 1;
 
-            long ceiling = available() != 0 ? cursor(lastIndex + 1, cursorValue(RETRY_SEGMENT)) : NEXT_SEGMENT;
+            long ceiling = cursor(lastIndex + 1, available() != 0 ? RETRY_SEGMENT_VALUE : NEXT_SEGMENT_VALUE);
 
             for (int currentIndex = index; currentIndex <= lastIndex; currentIndex++)
             {
@@ -295,7 +362,7 @@ public abstract class KafkaCacheIndexFile extends KafkaCacheFile
             final int index = cursorIndex(cursor);
             final int value = cursorValue(cursor);
 
-            long floor = NEXT_SEGMENT;
+            long floor = cursor(-1, NEXT_SEGMENT_VALUE);
 
             final int lastIndex = (capacity() >> 3) - 1;
             for (int currentIndex = index; 0 <= currentIndex && currentIndex <= lastIndex; currentIndex--)
@@ -324,7 +391,7 @@ public abstract class KafkaCacheIndexFile extends KafkaCacheFile
             final int index = cursorIndex(cursor);
             final int value = cursorValue(cursor);
 
-            long lower = NEXT_SEGMENT;
+            long lower = cursor(-1, NEXT_SEGMENT_VALUE);
 
             final int lastIndex = (capacity() >> 3) - 1;
             for (int currentIndex = index; 0 <= currentIndex && currentIndex <= lastIndex; currentIndex--)
@@ -372,7 +439,7 @@ public abstract class KafkaCacheIndexFile extends KafkaCacheFile
         {
             final int lastIndex = (capacity() >> 3) - 1;
 
-            long first = available() != 0 ? cursor(lastIndex + 1, cursorValue(RETRY_SEGMENT)) : NEXT_SEGMENT;
+            long first = cursor(lastIndex + 1, available() != 0 ? RETRY_SEGMENT_VALUE : NEXT_SEGMENT_VALUE);
 
             for (int currentIndex = 0; currentIndex <= lastIndex; currentIndex++)
             {
@@ -393,7 +460,7 @@ public abstract class KafkaCacheIndexFile extends KafkaCacheFile
         public long last(
             int key)
         {
-            long last = NEXT_SEGMENT;
+            long last = cursor(-1, NEXT_SEGMENT_VALUE);
 
             final int lastIndex = (capacity() >> 3) - 1;
             for (int currentIndex = lastIndex; currentIndex >= 0; currentIndex--)
@@ -412,6 +479,35 @@ public abstract class KafkaCacheIndexFile extends KafkaCacheFile
         }
 
         @Override
+        public long floor(
+            int key)
+        {
+            final int lastIndex = (capacity() >> 3) - 1;
+
+            long floor = cursor(lastIndex + 1, available() != 0 ? RETRY_SEGMENT_VALUE : NEXT_SEGMENT_VALUE);
+
+            int floorKey = 0xffff_ffff;
+            for (int currentIndex = 0; currentIndex <= lastIndex; currentIndex++)
+            {
+                final long indexEntry = readLong(currentIndex << 3);
+                final int indexKey = indexKey(indexEntry);
+
+                if (compareUnsigned(indexKey, key) >= 0 && compareUnsigned(indexKey, floorKey) < 0)
+                {
+                    floorKey = indexKey;
+                    floor = cursor(currentIndex, indexValue(indexEntry));
+
+                    if (indexKey == key)
+                    {
+                        break;
+                    }
+                }
+            }
+
+            return floor;
+        }
+
+        @Override
         public long higher(
             int key,
             long cursor)
@@ -422,7 +518,7 @@ public abstract class KafkaCacheIndexFile extends KafkaCacheFile
 
             final int lastIndex = (capacity() >> 3) - 1;
 
-            long higher = available() != 0 ? cursor(lastIndex + 1, cursorValue(RETRY_SEGMENT)) : NEXT_SEGMENT;
+            long higher = cursor(lastIndex + 1, available() != 0 ? RETRY_SEGMENT_VALUE : NEXT_SEGMENT_VALUE);
 
             for (int currentIndex = index; currentIndex <= lastIndex; currentIndex++)
             {
@@ -451,7 +547,7 @@ public abstract class KafkaCacheIndexFile extends KafkaCacheFile
 
             final int lastIndex = (capacity() >> 3) - 1;
 
-            long ceiling = available() != 0 ? cursor(lastIndex + 1, cursorValue(RETRY_SEGMENT)) : NEXT_SEGMENT;
+            long ceiling = cursor(lastIndex + 1, available() != 0 ? RETRY_SEGMENT_VALUE : NEXT_SEGMENT_VALUE);
             for (int currentIndex = index; currentIndex <= lastIndex; currentIndex++)
             {
                 final long indexEntry = readLong(currentIndex << 3);
@@ -477,7 +573,7 @@ public abstract class KafkaCacheIndexFile extends KafkaCacheFile
             final int value = cursorValue(cursor);
             assert index >= 0;
 
-            long floor = NEXT_SEGMENT;
+            long floor = cursor(-1, NEXT_SEGMENT_VALUE);
 
             final int lastIndex = (capacity() >> 3) - 1;
             for (int currentIndex = index; 0 <= currentIndex && currentIndex <= lastIndex; currentIndex--)
@@ -504,7 +600,7 @@ public abstract class KafkaCacheIndexFile extends KafkaCacheFile
             final int index = cursorIndex(cursor);
             final int value = cursorValue(cursor);
 
-            long lower = NEXT_SEGMENT;
+            long lower = cursor(-1, NEXT_SEGMENT_VALUE);
 
             final int lastIndex = (capacity() >> 3) - 1;
             for (int currentIndex = index; 0 <= currentIndex && currentIndex <= lastIndex; currentIndex--)

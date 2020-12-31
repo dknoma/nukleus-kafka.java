@@ -18,6 +18,7 @@ package org.reaktivity.nukleus.kafka.internal.stream;
 import static org.reaktivity.nukleus.budget.BudgetCreditor.NO_CREDITOR_INDEX;
 import static org.reaktivity.nukleus.kafka.internal.types.KafkaCapabilities.FETCH_ONLY;
 import static org.reaktivity.nukleus.kafka.internal.types.KafkaCapabilities.PRODUCE_ONLY;
+import static org.reaktivity.nukleus.kafka.internal.types.KafkaOffsetFW.Builder.DEFAULT_LATEST_OFFSET;
 import static org.reaktivity.nukleus.kafka.internal.types.KafkaOffsetType.HISTORICAL;
 import static org.reaktivity.nukleus.kafka.internal.types.KafkaOffsetType.LIVE;
 import static org.reaktivity.nukleus.kafka.internal.types.control.KafkaRouteExFW.Builder.DEFAULT_DELTA_TYPE;
@@ -107,6 +108,7 @@ public final class KafkaMergedFactory implements StreamFactory
     private static final int FLAGS_NONE = 0x00;
     private static final int FLAGS_FIN = 0x01;
     private static final int FLAGS_INIT = 0x02;
+    private static final int FLAGS_INCOMPLETE = 0x04;
     private static final int FLAGS_INIT_AND_FIN = FLAGS_INIT | FLAGS_FIN;
 
     private static final int DYNAMIC_PARTITION = -1;
@@ -369,46 +371,7 @@ public final class KafkaMergedFactory implements StreamFactory
     private static KafkaMergedCondition asMergedCondition(
         KafkaNotFW not)
     {
-        final KafkaConditionFW condition = not.condition();
-
-        KafkaMergedCondition mergedCondition = null;
-        switch (condition.kind())
-        {
-        case KafkaConditionFW.KIND_KEY:
-        {
-            final KafkaKeyFW key = condition.key();
-            final OctetsFW value = key.value();
-
-            DirectBuffer valueBuffer = null;
-            if (value != null)
-            {
-                valueBuffer = copyBuffer(value);
-            }
-
-            mergedCondition = new KafkaMergedCondition.NotKey(valueBuffer);
-            break;
-        }
-        case KafkaConditionFW.KIND_HEADER:
-            final KafkaHeaderFW header = condition.header();
-            final OctetsFW name = header.name();
-            final OctetsFW value = header.value();
-
-            DirectBuffer nameBuffer = null;
-            if (name != null)
-            {
-                nameBuffer = copyBuffer(name);
-            }
-
-            DirectBuffer valueBuffer = null;
-            if (value != null)
-            {
-                valueBuffer = copyBuffer(value);
-            }
-
-            mergedCondition = new KafkaMergedCondition.NotHeader(nameBuffer, valueBuffer);
-            break;
-        }
-        return mergedCondition;
+        return new KafkaMergedCondition.Not(asMergedCondition(not.condition()));
     }
 
     private static DirectBuffer copyBuffer(
@@ -628,7 +591,7 @@ public final class KafkaMergedFactory implements StreamFactory
 
                 final Header that = (Header) o;
                 return Objects.equals(this.name, that.name) &&
-                        Objects.equals(this.value, that.value);
+                       Objects.equals(this.value, that.value);
             }
         }
 
@@ -699,110 +662,37 @@ public final class KafkaMergedFactory implements StreamFactory
 
                 final Headers that = (Headers) o;
                 return Objects.equals(this.name, that.name) &&
-                           Objects.equals(this.values, that.values);
+                       Objects.equals(this.values, that.values);
             }
         }
 
-        private static final class NotKey extends KafkaMergedCondition
+        private static final class Not extends KafkaMergedCondition
         {
-            private final DirectBuffer value;
+            private final KafkaMergedCondition nested;
 
-            private NotKey(
-                DirectBuffer value)
+            private Not(
+                KafkaMergedCondition nested)
             {
-                this.value = value;
+                this.nested = nested;
             }
 
             @Override
             protected void set(
                 KafkaConditionFW.Builder condition)
             {
-                condition.key(this::set);
+                condition.not(this::set);
             }
 
             private void set(
-                KafkaKeyFW.Builder key)
+                KafkaNotFW.Builder not)
             {
-                if (value == null)
-                {
-                    key.length(-1).value((OctetsFW) null);
-                }
-                else
-                {
-                    key.length(value.capacity()).value(value, 0, value.capacity());
-                }
+                not.condition(nested::set);
             }
 
             @Override
             public int hashCode()
             {
-                return Objects.hash(value);
-            }
-
-            @Override
-            public boolean equals(Object obj)
-            {
-                if (this == obj)
-                {
-                    return false;
-                }
-
-                if (!(obj instanceof NotKey))
-                {
-                    return false;
-                }
-
-                NotKey that = (NotKey) obj;
-                return !Objects.equals(this.value, that.value);
-            }
-        }
-
-        private static final class NotHeader extends KafkaMergedCondition
-        {
-            private final DirectBuffer name;
-            private final DirectBuffer value;
-
-            private NotHeader(
-                DirectBuffer name,
-                DirectBuffer value)
-            {
-                this.name = name;
-                this.value = value;
-            }
-
-            @Override
-            protected void set(
-                KafkaConditionFW.Builder condition)
-            {
-                condition.header(this::set);
-            }
-
-            private void set(
-                KafkaHeaderFW.Builder header)
-            {
-                if (name == null)
-                {
-                    header.nameLen(-1).name((OctetsFW) null);
-                }
-                else
-                {
-                    header.nameLen(name.capacity()).name(name, 0, name.capacity());
-                }
-
-                if (value == null)
-                {
-                    header.valueLen(-1).value((OctetsFW) null);
-                }
-                else
-                {
-                    header.valueLen(value.capacity()).value(value, 0, value.capacity());
-                }
-            }
-
-            @Override
-            public int hashCode()
-            {
-                return Objects.hash(name, value);
+                return Objects.hash(nested);
             }
 
             @Override
@@ -814,14 +704,13 @@ public final class KafkaMergedFactory implements StreamFactory
                     return false;
                 }
 
-                if (!(o instanceof NotHeader))
+                if (!(o instanceof Not))
                 {
                     return false;
                 }
 
-                final NotHeader that = (NotHeader) o;
-                return Objects.equals(this.name, that.name) &&
-                        !Objects.equals(this.value, that.value);
+                final Not that = (Not) o;
+                return Objects.equals(this.nested, that.nested);
             }
         }
 
@@ -2732,9 +2621,10 @@ public final class KafkaMergedFactory implements StreamFactory
             doBegin(receiver, merged.resolvedId, initialId, traceId, merged.authorization, leaderId,
                 ex -> ex.set((b, o, l) -> kafkaBeginExRW.wrap(b, o, l)
                         .typeId(kafkaTypeId)
-                        .produce(p -> p.transaction((String) null) // TODO: default in kafka.idl
+                        .produce(pr -> pr.transaction((String) null) // TODO: default in kafka.idl
                                        .topic(merged.topic)
-                                       .partitionId(partitionId))
+                                       .partition(part -> part.partitionId(partitionId).
+                                           partitionOffset(DEFAULT_LATEST_OFFSET)))
                         .build()
                         .sizeof()));
         }
@@ -2751,7 +2641,7 @@ public final class KafkaMergedFactory implements StreamFactory
 
             Flyweight newKafkaDataEx = EMPTY_OCTETS;
 
-            if (flags != FLAGS_NONE)
+            if (flags != FLAGS_NONE && flags != FLAGS_INCOMPLETE)
             {
                 final ExtensionFW dataEx = extension.get(extensionRO::tryWrap);
                 final KafkaDataExFW kafkaDataEx = dataEx != null && dataEx.typeId() == kafkaTypeId ?
@@ -2773,9 +2663,10 @@ public final class KafkaMergedFactory implements StreamFactory
                 switch (flags)
                 {
                 case FLAGS_INIT_AND_FIN:
+                case FLAGS_INIT:
                     newKafkaDataEx = kafkaDataExRW.wrap(extBuffer, 0, extBuffer.capacity())
                             .typeId(kafkaTypeId)
-                            .produce(p -> p.deferred(deferred)
+                            .produce(pr -> pr.deferred(deferred)
                                            .timestamp(timestamp)
                                            .sequence(sequence)
                                            .key(k -> k.length(key.length())
@@ -2786,20 +2677,10 @@ public final class KafkaMergedFactory implements StreamFactory
                                                                                              .value(h.value())))))
                             .build();
                     break;
-                case FLAGS_INIT:
-                    newKafkaDataEx = kafkaDataExRW.wrap(extBuffer, 0, extBuffer.capacity())
-                            .typeId(kafkaTypeId)
-                            .produce(p -> p.deferred(deferred)
-                                           .timestamp(timestamp)
-                                           .sequence(sequence)
-                                           .key(k -> k.length(key.length())
-                                                      .value(key.value())))
-                            .build();
-                    break;
                 case FLAGS_FIN:
                     newKafkaDataEx = kafkaDataExRW.wrap(extBuffer, 0, extBuffer.capacity())
                             .typeId(kafkaTypeId)
-                            .produce(p -> p.headers(hs -> headers.forEach(h -> hs.item(i -> i.nameLen(h.nameLen())
+                            .produce(pr -> pr.headers(hs -> headers.forEach(h -> hs.item(i -> i.nameLen(h.nameLen())
                                                                                              .name(h.name())
                                                                                              .valueLen(h.valueLen())
                                                                                              .value(h.value())))))

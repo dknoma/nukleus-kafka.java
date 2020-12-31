@@ -18,8 +18,7 @@ package org.reaktivity.nukleus.kafka.internal.stream;
 import static java.lang.System.currentTimeMillis;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.reaktivity.nukleus.concurrent.Signaler.NO_CANCEL_ID;
-import static org.reaktivity.nukleus.kafka.internal.cache.KafkaCacheCursorRecord.NEXT_SEGMENT;
-import static org.reaktivity.nukleus.kafka.internal.cache.KafkaCacheCursorRecord.RETRY_SEGMENT;
+import static org.reaktivity.nukleus.kafka.internal.cache.KafkaCacheCursorRecord.cursorNextValue;
 import static org.reaktivity.nukleus.kafka.internal.cache.KafkaCacheCursorRecord.cursorRetryValue;
 import static org.reaktivity.nukleus.kafka.internal.cache.KafkaCacheCursorRecord.cursorValue;
 import static org.reaktivity.nukleus.kafka.internal.types.KafkaOffsetFW.Builder.DEFAULT_LATEST_OFFSET;
@@ -232,7 +231,7 @@ public final class KafkaCacheServerFetchFactory implements StreamFactory
                 final String cacheName = route.localAddress().asString();
                 final KafkaCache cache = supplyCache.apply(cacheName);
                 final KafkaCacheTopic topic = cache.supplyTopic(topicName);
-                final KafkaCachePartition partition = topic.supplyPartition(partitionId);
+                final KafkaCachePartition partition = topic.supplyFetchPartition(partitionId);
                 final KafkaCacheServerFetchFanout newFanout = new KafkaCacheServerFetchFanout(resolvedId, authorization,
                         affinity, partition, routeDeltaType, defaultOffset);
 
@@ -763,7 +762,7 @@ public final class KafkaCacheServerFetchFactory implements StreamFactory
                     final KafkaCacheIndexFile previousKeys = previousSegment.keysFile();
 
                     long keyCursor = previousKeys.last(keyHash);
-                    while (keyCursor != NEXT_SEGMENT && cursorValue(keyCursor) != cursorValue(RETRY_SEGMENT))
+                    while (!cursorNextValue(keyCursor) && !cursorRetryValue(keyCursor))
                     {
                         final int keyBaseOffsetDelta = cursorValue(keyCursor);
                         assert keyBaseOffsetDelta <= 0;
@@ -800,7 +799,7 @@ public final class KafkaCacheServerFetchFactory implements StreamFactory
                         }
 
                         final long nextKeyCursor = previousKeys.lower(keyHash, keyCursor);
-                        if (nextKeyCursor == NEXT_SEGMENT || cursorRetryValue(nextKeyCursor))
+                        if (cursorNextValue(nextKeyCursor) || cursorRetryValue(nextKeyCursor))
                         {
                             break;
                         }
@@ -1056,7 +1055,18 @@ public final class KafkaCacheServerFetchFactory implements StreamFactory
             long timeMillis,
             int signalId)
         {
-            return signaler.signalAt(timeMillis, routeId, initialId, signalId);
+            long timerId = NO_CANCEL_ID;
+
+            if (timeMillis <= System.currentTimeMillis())
+            {
+                signaler.signalNow(routeId, initialId, signalId);
+            }
+            else
+            {
+                timerId = signaler.signalAt(timeMillis, routeId, initialId, signalId);
+            }
+
+            return timerId;
         }
     }
 

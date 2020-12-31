@@ -75,6 +75,17 @@ public class CacheMergedIT
         k3po.finish();
     }
 
+    @Test
+    @Specification({
+        "${route}/cache.merged/controller",
+        "${client}/merged.fetch.filter.header.with.compaction/client",
+        "${server}/unmerged.fetch.filter.none.with.compaction/server"})
+    @ScriptProperty("serverAddress \"nukleus://streams/target#0\"")
+    public void shouldFetchMergedMessagesWithHeaderFilterAfterCompaction() throws Exception
+    {
+        k3po.finish();
+    }
+
     @Ignore("requires k3po parallel reads")
     @Test
     @Specification({
@@ -95,6 +106,18 @@ public class CacheMergedIT
         "${server}/unmerged.fetch.filter.none/server"})
     @ScriptProperty("serverAddress \"nukleus://streams/target#0\"")
     public void shouldFetchMergedMessagesWithNotHeaderFilter() throws Exception
+    {
+        k3po.finish();
+    }
+
+    @Ignore("requires k3po parallel reads")
+    @Test
+    @Specification({
+        "${route}/cache.merged/controller",
+        "${client}/merged.fetch.filter.key.and.not.header/client",
+        "${server}/unmerged.fetch.filter.none/server"})
+    @ScriptProperty("serverAddress \"nukleus://streams/target#0\"")
+    public void shouldFetchMergedMessagesWithKeyAndNotHeaderFilter() throws Exception
     {
         k3po.finish();
     }
@@ -266,6 +289,17 @@ public class CacheMergedIT
         "${server}/unmerged.produce.message.values.dynamic.hashed/server"})
     @ScriptProperty("serverAddress \"nukleus://streams/target#0\"")
     public void shouldProduceMergedMessageValuesDynamicHashed() throws Exception
+    {
+        k3po.finish();
+    }
+
+    @Test
+    @Specification({
+        "${route}/cache.merged/controller",
+        "${client}/merged.produce.message.flags.incomplete/client",
+        "${server}/unmerged.produce.message.flags.incomplete/server"})
+    @ScriptProperty("serverAddress \"nukleus://streams/target#0\"")
+    public void shouldProduceMergedMessageFlagsIncomplete() throws Exception
     {
         k3po.finish();
     }

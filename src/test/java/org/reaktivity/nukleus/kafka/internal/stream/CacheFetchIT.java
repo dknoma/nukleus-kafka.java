@@ -76,7 +76,7 @@ public class CacheFetchIT
         final KafkaNukleus nukleus = reaktor.nukleus(KafkaNukleus.class);
         final KafkaCache cache = nukleus.supplyCache("kafka-cache#0");
         final KafkaCacheTopic topic = cache.supplyTopic("test");
-        this.partition = topic.supplyPartition(0);
+        this.partition = topic.supplyFetchPartition(0);
     }
 
     @Test
@@ -576,6 +576,21 @@ public class CacheFetchIT
         "${server}/filter.none/server"})
     @ScriptProperty("serverAddress \"nukleus://streams/target#0\"")
     public void shouldReceiveMessagesWithNotHeaderFilter() throws Exception
+    {
+        partition.append(1L);
+        k3po.start();
+        k3po.awaitBarrier("RECEIVED_MESSAGE_2");
+        k3po.notifyBarrier("SEND_MESSAGE_3");
+        k3po.finish();
+    }
+
+    @Test
+    @Specification({
+        "${route}/cache/controller",
+        "${client}/filter.key.and.not.header/client",
+        "${server}/filter.none/server"})
+    @ScriptProperty("serverAddress \"nukleus://streams/target#0\"")
+    public void shouldReceiveMessagesWithKeyAndNotHeaderFilter() throws Exception
     {
         partition.append(1L);
         k3po.start();
